@@ -148,11 +148,22 @@ with tab1:
     col1, col2, col3 = st.columns([1, 1, 2])
     with col1:
         if st.button("➕ Add Trip"):
+            # Calculate default dates based on existing trips to prevent collisions
+            if st.session_state.planned_trips:
+                # Start the day after the last trip ends
+                last_trip = st.session_state.planned_trips[-1]
+                default_start = last_trip['end_date'] + timedelta(days=1)
+                default_end = default_start + timedelta(days=7)
+            else:
+                # No existing trips, use defaults relative to today
+                default_start = today + timedelta(days=7)
+                default_end = today + timedelta(days=14)
+
             st.session_state.planned_trips.append({
                 'id': len(st.session_state.planned_trips),
                 'name': f"Trip {len(st.session_state.planned_trips) + 1}",
-                'start_date': today + timedelta(days=7),
-                'end_date': today + timedelta(days=14),
+                'start_date': default_start,
+                'end_date': default_end,
                 'country': 'Turkey'
             })
             st.rerun()
@@ -163,45 +174,78 @@ with tab1:
             with st.expander(f"**{trip['name']}**", expanded=True):
                 col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
 
+                # Calculate date constraints based on adjacent trips to prevent collisions
+                start_min_value = today
+                start_max_value = None
+                end_max_value = None
+
+                # If there's a previous trip, start date must be after previous trip's end date
+                if idx > 0:
+                    prev_trip = st.session_state.planned_trips[idx - 1]
+                    start_min_value = max(start_min_value, prev_trip['end_date'] + timedelta(days=1))
+
+                # If there's a next trip, end date must be before next trip's start date
+                if idx < len(st.session_state.planned_trips) - 1:
+                    next_trip = st.session_state.planned_trips[idx + 1]
+                    end_max_value = next_trip['start_date'] - timedelta(days=1)
+                    start_max_value = next_trip['start_date'] - timedelta(days=1)
+
                 with col1:
+                    current_start = trip['start_date']
+                    start_key = f"start_{idx}"
+
+                    # Ensure current_start is within constraints
+                    if current_start < start_min_value:
+                        current_start = start_min_value
+                        st.session_state.planned_trips[idx]['start_date'] = current_start
+                    if start_max_value and current_start > start_max_value:
+                        current_start = start_max_value
+                        st.session_state.planned_trips[idx]['start_date'] = current_start
+
+                    # Initialize session state for start date if not exists
+                    if start_key not in st.session_state:
+                        st.session_state[start_key] = current_start
+
                     new_start = st.date_input(
                         "Start Date",
-                        value=trip['start_date'],
-                        min_value=today,
-                        key=f"start_{idx}"
+                        value=current_start,
+                        min_value=start_min_value,
+                        max_value=start_max_value,
+                        key=start_key
                     )
                     if new_start != trip['start_date']:
                         st.session_state.planned_trips[idx]['start_date'] = new_start
                         # Adjust end date if it's now before start date
                         if trip['end_date'] < new_start:
                             st.session_state.planned_trips[idx]['end_date'] = new_start + timedelta(days=7)
+                            # Update the end date widget key
+                            st.session_state[f"end_{idx}"] = new_start + timedelta(days=7)
+                        st.rerun()
 
+                # Create placeholder for end date (will be filled after button)
                 with col2:
-                    # Read current values from session state (source of truth)
-                    current_start_date = st.session_state.planned_trips[idx]['start_date']
-                    current_end_date = st.session_state.planned_trips[idx]['end_date']
+                    end_date_placeholder = st.empty()
 
-                    # Ensure end_date is not before start_date
-                    safe_end_date = max(current_end_date, current_start_date)
+                # Get current values
+                current_start_date = st.session_state.planned_trips[idx]['start_date']
+                current_end_date = st.session_state.planned_trips[idx]['end_date']
 
-                    # If we had to adjust, update session state
-                    if safe_end_date != current_end_date:
-                        st.session_state.planned_trips[idx]['end_date'] = safe_end_date
-                        current_end_date = safe_end_date
+                # Ensure end_date is not before start_date
+                safe_end_date = max(current_end_date, current_start_date)
+                if safe_end_date != current_end_date:
+                    st.session_state.planned_trips[idx]['end_date'] = safe_end_date
+                    current_end_date = safe_end_date
 
-                    new_end = st.date_input(
-                        "End Date",
-                        value=current_end_date,
-                        min_value=current_start_date,
-                        key=f"end_{idx}"
-                    )
+                # Ensure current_end_date is within constraints
+                if end_max_value and current_end_date > end_max_value:
+                    current_end_date = end_max_value
+                    st.session_state.planned_trips[idx]['end_date'] = current_end_date
 
-                    # Update session state if widget changed
-                    if new_end != current_end_date:
-                        st.session_state.planned_trips[idx]['end_date'] = new_end
-                        current_end_date = new_end
-                    else:
-                        print(f"End date not changed: {current_end_date}")
+                end_key = f"end_{idx}"
+
+                # Initialize session state for end date if not exists
+                if end_key not in st.session_state:
+                    st.session_state[end_key] = current_end_date
 
                 with col3:
                     # Calculate duration using session state values
@@ -210,56 +254,84 @@ with tab1:
                     duration = (actual_end - actual_start).days + 1
                     st.metric("Duration", f"{duration} days")
 
-                    # Display any stored messages from previous max days calculation
-                    if 'max_days_message' in st.session_state:
-                        msg_type, msg = st.session_state.max_days_message
-                        if msg_type == 'success':
-                            st.success(msg)
-                        elif msg_type == 'error':
-                            st.error(msg)
-                        del st.session_state.max_days_message
+                    # Use Max Days button - only show for the last trip
+                    is_last_trip = (idx == len(st.session_state.planned_trips) - 1)
+                    if is_last_trip:
+                        # Use Max Days button (instantiated before the widget!)
+                        if st.button("Use Max Days", key=f"max_{idx}"):
+                            # Use session state values (source of truth)
+                            trip_start_date = st.session_state.planned_trips[idx]['start_date']
 
-                    # Use Max Days button
-                    if st.button("Use Max Days", key=f"max_{idx}"):
-                        # Use session state values (source of truth)
-                        trip_start_date = st.session_state.planned_trips[idx]['start_date']
-                        print("\n" + "="*80)
-                        print(f"USE MAX DAYS CLICKED - Trip {idx}")
-                        print(f"Start date: {trip_start_date}")
-                        print(f"Buffer days: {buffer_days}")
-                        print(f"Current end date: {current_end_date}")
-                        print("="*80)
+                            # Build complete travel history including all previous planned trips
+                            # This ensures max days calculation considers all trips
+                            complete_history = st.session_state.data['travel_history'].copy()
 
-                        # Calculate maximum trip duration
-                        trip_analysis = calc.find_max_trip_duration(
-                            trip_start=trip_start_date,
-                            buffer_days=buffer_days,
-                            max_duration=365  # Allow trips up to a year
-                        )
+                            # Add all planned trips before this one
+                            for prev_idx in range(idx):
+                                prev_trip = st.session_state.planned_trips[prev_idx]
+                                complete_history.append({
+                                    'country': 'Turkey',
+                                    'start': prev_trip['start_date'].strftime('%Y-%m-%d'),
+                                    'end': prev_trip['end_date'].strftime('%Y-%m-%d')
+                                })
 
-                        recommended_return = trip_analysis.get('recommended_return')
+                            print("\n" + "="*80)
+                            print(f"USE MAX DAYS CLICKED - Trip {idx} (LAST TRIP)")
+                            print(f"Start date: {trip_start_date}")
+                            print(f"Buffer days: {buffer_days}")
+                            print(f"Current end date: {current_end_date}")
+                            print(f"Including {len(complete_history)} historical periods")
+                            print("="*80)
 
-                        print(f"\nRESULT:")
-                        print(f"  safe: {trip_analysis.get('safe')}")
-                        print(f"  max_duration: {trip_analysis.get('max_duration')}")
-                        print(f"  recommended_return: {recommended_return}")
-                        print(f"  buffer_maintained: {trip_analysis.get('buffer_maintained')}")
-                        print(f"  Full response: {trip_analysis}")
-                        print("="*80 + "\n")
+                            # Calculate maximum trip duration with complete history
+                            calc_with_history = ResidenceCalculator(complete_history)
+                            trip_analysis = calc_with_history.find_max_trip_duration(
+                                trip_start=trip_start_date,
+                                buffer_days=buffer_days,
+                                max_duration=365  # Allow trips up to a year
+                            )
 
-                        if trip_analysis.get('safe') and trip_analysis.get('max_duration', 0) > 0 and recommended_return:
-                            # Update the end date - store in session state (source of truth)
-                            print(f"✅ UPDATING end_date from {st.session_state.planned_trips[idx]['end_date']} to {recommended_return}")
-                            st.session_state.planned_trips[idx]['end_date'] = recommended_return
-                            # Store success message for display after rerun
-                            st.session_state.max_days_message = ('success', f"✅ Updated! Max trip: {trip_analysis['max_duration']} days (return {recommended_return.strftime('%b %d, %Y')}), Buffer: {trip_analysis['buffer_maintained']} days")
-                            st.rerun()
-                        else:
-                            msg = trip_analysis.get('message', 'Cannot calculate - already at or above buffer limit')
-                            print(f"❌ FAILED: {msg}")
-                            st.session_state.max_days_message = ('error', f"⚠️ {msg}")
-                            st.error(f"⚠️ {msg}")
-                            st.write("Debug info:", trip_analysis)
+                            recommended_return = trip_analysis.get('recommended_return')
+
+                            print(f"\nRESULT:")
+                            print(f"  safe: {trip_analysis.get('safe')}")
+                            print(f"  max_duration: {trip_analysis.get('max_duration')}")
+                            print(f"  recommended_return: {recommended_return}")
+                            print(f"  buffer_maintained: {trip_analysis.get('buffer_maintained')}")
+                            print(f"  Full response: {trip_analysis}")
+                            print("="*80 + "\n")
+
+                            if trip_analysis.get('safe') and trip_analysis.get('max_duration', 0) > 0 and recommended_return:
+                                # Update both trip data and widget session state
+                                print(f"✅ UPDATING end_date from {st.session_state.planned_trips[idx]['end_date']} to {recommended_return}")
+                                st.session_state.planned_trips[idx]['end_date'] = recommended_return
+                                # Update the widget's session state key directly
+                                st.session_state[end_key] = recommended_return
+                                # Show toast notification (auto-fades)
+                                st.toast(f"✅ Updated! Max trip: {trip_analysis['max_duration']} days (return {recommended_return.strftime('%b %d, %Y')}), Buffer: {trip_analysis['buffer_maintained']} days", icon="✅")
+                                # Rerun to update the widget with new value
+                                st.rerun()
+                            else:
+                                msg = trip_analysis.get('message', 'Cannot calculate - already at or above buffer limit')
+                                print(f"❌ FAILED: {msg}")
+                                st.session_state.max_days_message = ('error', f"⚠️ {msg}")
+                                st.error(f"⚠️ {msg}")
+                                st.write("Debug info:", trip_analysis)
+
+                # Now create the end date widget in the placeholder (after button is instantiated)
+                with end_date_placeholder.container():
+                    new_end = st.date_input(
+                        "End Date",
+                        value=current_end_date,
+                        min_value=current_start_date,
+                        max_value=end_max_value,
+                        key=end_key
+                    )
+
+                    # Update session state if widget changed
+                    if new_end != current_end_date:
+                        st.session_state.planned_trips[idx]['end_date'] = new_end
+                        st.rerun()
 
                 with col4:
                     if st.button("🗑️", key=f"del_{idx}"):
@@ -269,20 +341,51 @@ with tab1:
                 # Validation - use session state values (source of truth)
                 validation_start = st.session_state.planned_trips[idx]['start_date']
                 validation_end = st.session_state.planned_trips[idx]['end_date']
-                test_trip = {
-                    'country': 'Turkey',
-                    'start': validation_start.strftime('%Y-%m-%d'),
-                    'end': validation_end.strftime('%Y-%m-%d')
-                }
-                calc_with_trip = ResidenceCalculator(st.session_state.data['travel_history'] + [test_trip])
-                trip_status = calc_with_trip.get_current_status(validation_end)
 
-                if not trip_status['compliant']:
-                    st.error(f"❌ This trip exceeds the 183-day limit! ({183 - trip_status['days_remaining']} days over)")
-                elif trip_status['days_remaining'] < buffer_days:
-                    st.warning(f"⚠️ Below buffer: Only {trip_status['days_remaining']} days remaining (buffer: {buffer_days})")
-                else:
-                    st.success(f"✅ Safe trip: {trip_status['days_remaining']} days remaining after return")
+                # Check for trip collisions with other planned trips
+                has_collision = False
+                for other_idx, other_trip in enumerate(st.session_state.planned_trips):
+                    if other_idx == idx:
+                        continue  # Skip self
+
+                    other_start = other_trip['start_date']
+                    other_end = other_trip['end_date']
+
+                    # Check if trips overlap (but allow end date == start date)
+                    if validation_start <= other_end and validation_end >= other_start:
+                        # They overlap - check if it's just a boundary touch
+                        if not (validation_end == other_start or validation_start == other_end):
+                            has_collision = True
+                            st.error(f"❌ Trip collision detected with {other_trip['name']}! Trips cannot overlap.")
+                            break
+
+                # Only show overall compliance for the last trip
+                if is_last_trip and not has_collision:
+                    # Display any stored error messages from max days calculation
+                    if 'max_days_message' in st.session_state:
+                        msg_type, msg = st.session_state.max_days_message
+                        if msg_type == 'error':
+                            st.error(msg)
+                        del st.session_state.max_days_message
+
+                    # Include all planned trips in the validation
+                    all_planned_trips = []
+                    for t_idx, t in enumerate(st.session_state.planned_trips):
+                        all_planned_trips.append({
+                            'country': 'Turkey',
+                            'start': t['start_date'].strftime('%Y-%m-%d'),
+                            'end': t['end_date'].strftime('%Y-%m-%d')
+                        })
+
+                    calc_with_all_trips = ResidenceCalculator(st.session_state.data['travel_history'] + all_planned_trips)
+                    trip_status = calc_with_all_trips.get_current_status(validation_end)
+
+                    if not trip_status['compliant']:
+                        st.error(f"❌ All trips exceed the 183-day limit! ({183 - trip_status['days_remaining']} days over)")
+                    elif trip_status['days_remaining'] < buffer_days:
+                        st.warning(f"⚠️ Below buffer: Only {trip_status['days_remaining']} days remaining after all trips (buffer: {buffer_days})")
+                    else:
+                        st.success(f"✅ Safe trip: {trip_status['days_remaining']} days remaining after return")
     else:
         st.info("No trips planned. Click 'Add Trip' to start planning.")
 
