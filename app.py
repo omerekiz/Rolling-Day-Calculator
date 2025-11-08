@@ -616,7 +616,7 @@ with tab2:
         st.info("No travel history yet. Add a row below to start tracking.")
 
         # Show empty editor with proper types
-        empty_df = pd.DataFrame(columns=["country", "start", "end"])
+        empty_df = pd.DataFrame(columns=["country", "start", "end"])  # type: ignore[call-overload]
         empty_df['start'] = pd.to_datetime(empty_df['start'])
         empty_df['end'] = pd.to_datetime(empty_df['end'])
 
