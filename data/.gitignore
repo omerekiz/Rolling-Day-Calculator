@@ -1,0 +1,7 @@
+# Ignore all user data except the sample data
+*
+
+# Allow sample directory and its contents
+!sample/
+!sample/**
+!.gitignore

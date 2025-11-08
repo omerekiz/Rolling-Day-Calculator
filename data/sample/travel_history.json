@@ -1,0 +1,41 @@
+{
+  "person_name": "Sample User",
+  "buffer_days": 12,
+  "travel_history": [
+    {
+      "country": "Germany",
+      "start": "2024-09-01",
+      "end": "2024-11-15"
+    },
+    {
+      "country": "Turkey",
+      "start": "2024-11-16",
+      "end": "2024-12-05"
+    },
+    {
+      "country": "Germany",
+      "start": "2024-12-06",
+      "end": "2025-02-20"
+    },
+    {
+      "country": "Turkey",
+      "start": "2025-02-21",
+      "end": "2025-03-15"
+    },
+    {
+      "country": "Germany",
+      "start": "2025-03-16",
+      "end": "2025-05-10"
+    },
+    {
+      "country": "Turkey",
+      "start": "2025-05-11",
+      "end": "2025-06-30"
+    },
+    {
+      "country": "Germany",
+      "start": "2025-07-01",
+      "end": "2025-08-20"
+    }
+  ]
+}
