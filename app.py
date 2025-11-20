@@ -51,11 +51,28 @@ if 'using_imported_data' not in st.session_state:
 with st.sidebar:
     st.title("⚙️ Settings")
 
-    # Import Data Section
-    st.subheader("📥 Import Data")
+    # Import/Export Data Section
+    st.subheader("📥 Import / Export Data")
 
+    # Export current data
+    export_data = {
+        "person_name": st.session_state.data['person_name'],
+        "buffer_days": st.session_state.data['buffer_days'],
+        "travel_history": st.session_state.data['travel_history']
+    }
+    export_json = json.dumps(export_data, indent=2)
+
+    st.download_button(
+        label="📤 Export current data",
+        data=export_json,
+        file_name=f"travel_history_{st.session_state.data['person_name'].lower().replace(' ', '_')}.json",
+        mime="application/json",
+        help="Download your travel history as a JSON file"
+    )
+
+    # Import data
     uploaded_file = st.file_uploader(
-        "Upload travel history JSON",
+        "📥 Import travel history",
         type=['json'],
         help="Upload your own travel history file to use without saving to the server"
     )
