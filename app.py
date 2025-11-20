@@ -8,6 +8,7 @@ import datetime
 from datetime import timedelta
 import pandas as pd
 import altair as alt
+import json
 from residence_calculator import ResidenceCalculator
 from config import DataManager
 
@@ -40,6 +41,9 @@ if 'unsaved_changes' not in st.session_state:
 if 'planned_trips' not in st.session_state:
     st.session_state.planned_trips = []
 
+if 'using_imported_data' not in st.session_state:
+    st.session_state.using_imported_data = False
+
 # ============================================================================
 # SIDEBAR
 # ============================================================================
@@ -47,22 +51,82 @@ if 'planned_trips' not in st.session_state:
 with st.sidebar:
     st.title("⚙️ Settings")
 
-    # Person selector
-    people = dm.get_available_people()
-    selected_person = st.selectbox(
-        "Select Person",
-        people,
-        index=people.index(st.session_state.person_id) if st.session_state.person_id in people else 0
+    # Import Data Section
+    st.subheader("📥 Import Data")
+
+    uploaded_file = st.file_uploader(
+        "Upload travel history JSON",
+        type=['json'],
+        help="Upload your own travel history file to use without saving to the server"
     )
 
-    if selected_person != st.session_state.person_id:
-        st.session_state.person_id = selected_person
-        st.session_state.data = dm.load_person_data(selected_person)
-        st.session_state.unsaved_changes = False
-        st.session_state.planned_trips = []
-        st.rerun()
+    if uploaded_file is not None:
+        try:
+            # Parse the uploaded JSON
+            imported_data = json.load(uploaded_file)
+
+            # Validate required fields
+            required_fields = ['person_name', 'travel_history']
+            missing_fields = [f for f in required_fields if f not in imported_data]
+
+            if missing_fields:
+                st.error(f"Missing required fields: {', '.join(missing_fields)}")
+            else:
+                # Validate travel_history structure
+                valid_history = True
+                for i, entry in enumerate(imported_data['travel_history']):
+                    if not all(key in entry for key in ['country', 'start', 'end']):
+                        st.error(f"Invalid travel entry at index {i}: must have 'country', 'start', 'end'")
+                        valid_history = False
+                        break
+                    if entry['country'] not in ['Turkey', 'Germany']:
+                        st.error(f"Invalid country at index {i}: must be 'Turkey' or 'Germany'")
+                        valid_history = False
+                        break
+
+                if valid_history:
+                    # Set defaults for optional fields
+                    if 'buffer_days' not in imported_data:
+                        imported_data['buffer_days'] = 12
+
+                    # Load imported data into session state
+                    st.session_state.data = imported_data
+                    st.session_state.using_imported_data = True
+                    st.session_state.planned_trips = []
+                    st.success(f"Loaded data for: {imported_data['person_name']}")
+        except json.JSONDecodeError as e:
+            st.error(f"Invalid JSON file: {e}")
+        except Exception as e:
+            st.error(f"Error loading file: {e}")
+
+    # Show indicator when using imported data
+    if st.session_state.using_imported_data:
+        st.info(f"Using imported data for **{st.session_state.data['person_name']}**")
+        if st.button("Clear imported data"):
+            st.session_state.using_imported_data = False
+            st.session_state.data = dm.load_person_data(st.session_state.person_id)
+            st.session_state.planned_trips = []
+            st.rerun()
 
     st.divider()
+
+    # Person selector (only show if not using imported data)
+    if not st.session_state.using_imported_data:
+        people = dm.get_available_people()
+        selected_person = st.selectbox(
+            "Select Person",
+            people,
+            index=people.index(st.session_state.person_id) if st.session_state.person_id in people else 0
+        )
+
+        if selected_person != st.session_state.person_id:
+            st.session_state.person_id = selected_person
+            st.session_state.data = dm.load_person_data(selected_person)
+            st.session_state.unsaved_changes = False
+            st.session_state.planned_trips = []
+            st.rerun()
+
+        st.divider()
 
     # Buffer days
     buffer_days = st.slider(
@@ -79,11 +143,14 @@ with st.sidebar:
 
     st.divider()
 
-    # Auto-save when buffer changes
-    if st.session_state.unsaved_changes:
+    # Auto-save when buffer changes (only for server data, not imported data)
+    if st.session_state.unsaved_changes and not st.session_state.using_imported_data:
         dm.save_person_data(st.session_state.person_id, st.session_state.data)
         st.session_state.unsaved_changes = False
         st.success("✅ Buffer setting saved", icon="💾")
+    elif st.session_state.unsaved_changes and st.session_state.using_imported_data:
+        # Don't save imported data to server, just clear the flag
+        st.session_state.unsaved_changes = False
 
 # ============================================================================
 # MAIN AREA
@@ -658,4 +725,7 @@ with tab2:
 # ============================================================================
 
 st.divider()
-st.caption("💡 Tip: Plan your trips in the Trip Planner tab. Only your buffer setting and travel history are saved to disk.")
+if st.session_state.using_imported_data:
+    st.caption("💡 Tip: You're using imported data. Changes will NOT be saved to the server - your data stays private!")
+else:
+    st.caption("💡 Tip: Plan your trips in the Trip Planner tab. Import your own JSON to keep your data private on the deployed app.")
