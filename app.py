@@ -21,11 +21,21 @@ st.set_page_config(
 )
 
 # Initialize data manager
-@st.cache_resource
-def get_data_manager():
-    return DataManager()
+dm = DataManager()
 
-dm = get_data_manager()
+def save_all_data():
+    """Save travel history + planned trips to disk"""
+    trips_to_save = []
+    for t in st.session_state.planned_trips:
+        trips_to_save.append({
+            'name': t['name'],
+            'country': t.get('country', 'Turkey'),
+            'start_date': t['start_date'].strftime('%Y-%m-%d') if hasattr(t['start_date'], 'strftime') else t['start_date'],
+            'end_date': t['end_date'].strftime('%Y-%m-%d') if hasattr(t['end_date'], 'strftime') else t['end_date']
+        })
+    save_data = dict(st.session_state.data)
+    save_data['planned_trips'] = trips_to_save
+    dm.save_person_data(st.session_state.person_id, save_data)
 
 # Session state initialization
 if 'person_id' not in st.session_state:
@@ -39,10 +49,21 @@ if 'unsaved_changes' not in st.session_state:
     st.session_state.unsaved_changes = False
 
 if 'planned_trips' not in st.session_state:
-    st.session_state.planned_trips = []
+    # Load planned trips from the same data file
+    raw_trips = st.session_state.data.get('planned_trips', [])
+    loaded_trips = []
+    for trip in raw_trips:
+        start = datetime.datetime.strptime(trip['start_date'], '%Y-%m-%d').date()
+        end = datetime.datetime.strptime(trip['end_date'], '%Y-%m-%d').date()
+        loaded_trips.append({
+            'id': len(loaded_trips),
+            'name': trip.get('name', f"Trip {len(loaded_trips) + 1}"),
+            'start_date': start,
+            'end_date': end,
+            'country': trip.get('country', 'Turkey')
+        })
+    st.session_state.planned_trips = loaded_trips
 
-if 'using_imported_data' not in st.session_state:
-    st.session_state.using_imported_data = False
 
 # ============================================================================
 # SIDEBAR
@@ -51,99 +72,72 @@ if 'using_imported_data' not in st.session_state:
 with st.sidebar:
     st.title("⚙️ Settings")
 
-    # Import/Export Data Section
-    st.subheader("📥 Import / Export Data")
+    # Export Data
+    st.subheader("📤 Export")
 
-    # Export current data
+    # Build combined export with both travel history and planned trips
     export_data = {
         "person_name": st.session_state.data['person_name'],
         "buffer_days": st.session_state.data['buffer_days'],
-        "travel_history": st.session_state.data['travel_history']
+        "travel_history": [
+            {
+                'country': e['country'],
+                'start': e['start'] if isinstance(e['start'], str) else e['start'].strftime('%Y-%m-%d'),
+                'end': e['end'] if isinstance(e['end'], str) else e['end'].strftime('%Y-%m-%d')
+            }
+            for e in st.session_state.data['travel_history']
+        ],
+        "planned_trips": [
+            {
+                'name': t['name'],
+                'country': t.get('country', 'Turkey'),
+                'start_date': t['start_date'].strftime('%Y-%m-%d') if hasattr(t['start_date'], 'strftime') else t['start_date'],
+                'end_date': t['end_date'].strftime('%Y-%m-%d') if hasattr(t['end_date'], 'strftime') else t['end_date']
+            }
+            for t in st.session_state.planned_trips
+        ]
     }
     export_json = json.dumps(export_data, indent=2)
 
     st.download_button(
-        label="📤 Export current data",
+        label="📤 Export All Data",
         data=export_json,
-        file_name=f"travel_history_{st.session_state.data['person_name'].lower().replace(' ', '_')}.json",
+        file_name=f"travel_data_{st.session_state.data['person_name'].lower().replace(' ', '_')}.json",
         mime="application/json",
-        help="Download your travel history as a JSON file"
+        use_container_width=True
     )
-
-    # Import data
-    uploaded_file = st.file_uploader(
-        "📥 Import travel history",
-        type=['json'],
-        help="Upload your own travel history file to use without saving to the server"
-    )
-
-    if uploaded_file is not None:
-        try:
-            # Parse the uploaded JSON
-            imported_data = json.load(uploaded_file)
-
-            # Validate required fields
-            required_fields = ['person_name', 'travel_history']
-            missing_fields = [f for f in required_fields if f not in imported_data]
-
-            if missing_fields:
-                st.error(f"Missing required fields: {', '.join(missing_fields)}")
-            else:
-                # Validate travel_history structure
-                valid_history = True
-                for i, entry in enumerate(imported_data['travel_history']):
-                    if not all(key in entry for key in ['country', 'start', 'end']):
-                        st.error(f"Invalid travel entry at index {i}: must have 'country', 'start', 'end'")
-                        valid_history = False
-                        break
-                    if entry['country'] not in ['Turkey', 'Germany']:
-                        st.error(f"Invalid country at index {i}: must be 'Turkey' or 'Germany'")
-                        valid_history = False
-                        break
-
-                if valid_history:
-                    # Set defaults for optional fields
-                    if 'buffer_days' not in imported_data:
-                        imported_data['buffer_days'] = 12
-
-                    # Load imported data into session state
-                    st.session_state.data = imported_data
-                    st.session_state.using_imported_data = True
-                    st.session_state.planned_trips = []
-                    st.success(f"Loaded data for: {imported_data['person_name']}")
-        except json.JSONDecodeError as e:
-            st.error(f"Invalid JSON file: {e}")
-        except Exception as e:
-            st.error(f"Error loading file: {e}")
-
-    # Show indicator when using imported data
-    if st.session_state.using_imported_data:
-        st.info(f"Using imported data for **{st.session_state.data['person_name']}**")
-        if st.button("Clear imported data"):
-            st.session_state.using_imported_data = False
-            st.session_state.data = dm.load_person_data(st.session_state.person_id)
-            st.session_state.planned_trips = []
-            st.rerun()
 
     st.divider()
 
-    # Person selector (only show if not using imported data)
-    if not st.session_state.using_imported_data:
-        people = dm.get_available_people()
-        selected_person = st.selectbox(
-            "Select Person",
-            people,
-            index=people.index(st.session_state.person_id) if st.session_state.person_id in people else 0
-        )
+    # Person selector
+    people = dm.get_available_people()
+    selected_person = st.selectbox(
+        "Select Person",
+        people,
+        index=people.index(st.session_state.person_id) if st.session_state.person_id in people else 0
+    )
 
-        if selected_person != st.session_state.person_id:
-            st.session_state.person_id = selected_person
-            st.session_state.data = dm.load_person_data(selected_person)
-            st.session_state.unsaved_changes = False
-            st.session_state.planned_trips = []
-            st.rerun()
+    if selected_person != st.session_state.person_id:
+        st.session_state.person_id = selected_person
+        st.session_state.data = dm.load_person_data(selected_person)
+        st.session_state.unsaved_changes = False
+        # Reload planned trips from the same data
+        raw_trips = st.session_state.data.get('planned_trips', [])
+        loaded = []
+        for trip in raw_trips:
+            start = datetime.datetime.strptime(trip['start_date'], '%Y-%m-%d').date()
+            end = datetime.datetime.strptime(trip['end_date'], '%Y-%m-%d').date()
+            loaded.append({
+                'id': len(loaded),
+                'name': trip.get('name', f"Trip {len(loaded) + 1}"),
+                'start_date': start,
+                'end_date': end,
+                'country': trip.get('country', 'Turkey')
+            })
+        st.session_state.planned_trips = loaded
+        st.rerun()
 
-        st.divider()
+    st.divider()
 
     # Buffer days
     buffer_days = st.slider(
@@ -160,14 +154,11 @@ with st.sidebar:
 
     st.divider()
 
-    # Auto-save when buffer changes (only for server data, not imported data)
-    if st.session_state.unsaved_changes and not st.session_state.using_imported_data:
-        dm.save_person_data(st.session_state.person_id, st.session_state.data)
+    # Auto-save when buffer changes
+    if st.session_state.unsaved_changes:
+        save_all_data()
         st.session_state.unsaved_changes = False
-        st.success("✅ Buffer setting saved", icon="💾")
-    elif st.session_state.unsaved_changes and st.session_state.using_imported_data:
-        # Don't save imported data to server, just clear the flag
-        st.session_state.unsaved_changes = False
+        st.success("✅ Settings saved", icon="💾")
 
 # ============================================================================
 # MAIN AREA
@@ -250,6 +241,7 @@ with tab1:
                 'end_date': default_end,
                 'country': 'Turkey'
             })
+            save_all_data()
             st.rerun()
 
     # Display and edit trips
@@ -259,14 +251,14 @@ with tab1:
                 col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
 
                 # Calculate date constraints based on adjacent trips to prevent collisions
-                start_min_value = today
+                start_min_value = None
                 start_max_value = None
                 end_max_value = None
 
                 # If there's a previous trip, start date must be after previous trip's end date
                 if idx > 0:
                     prev_trip = st.session_state.planned_trips[idx - 1]
-                    start_min_value = max(start_min_value, prev_trip['end_date'] + timedelta(days=1))
+                    start_min_value = prev_trip['end_date'] + timedelta(days=1)
 
                 # If there's a next trip, end date must be before next trip's start date
                 if idx < len(st.session_state.planned_trips) - 1:
@@ -279,7 +271,7 @@ with tab1:
                     start_key = f"start_{idx}"
 
                     # Ensure current_start is within constraints
-                    if current_start < start_min_value:
+                    if start_min_value and current_start < start_min_value:
                         current_start = start_min_value
                         st.session_state.planned_trips[idx]['start_date'] = current_start
                     if start_max_value and current_start > start_max_value:
@@ -304,6 +296,7 @@ with tab1:
                             st.session_state.planned_trips[idx]['end_date'] = new_start + timedelta(days=7)
                             # Update the end date widget key
                             st.session_state[f"end_{idx}"] = new_start + timedelta(days=7)
+                        save_all_data()
                         st.rerun()
 
                 # Create placeholder for end date (will be filled after button)
@@ -393,6 +386,7 @@ with tab1:
                                 st.session_state[end_key] = recommended_return
                                 # Show toast notification (auto-fades)
                                 st.toast(f"✅ Updated! Max trip: {trip_analysis['max_duration']} days (return {recommended_return.strftime('%b %d, %Y')}), Buffer: {trip_analysis['buffer_maintained']} days", icon="✅")
+                                save_all_data()
                                 # Rerun to update the widget with new value
                                 st.rerun()
                             else:
@@ -415,11 +409,13 @@ with tab1:
                     # Update session state if widget changed
                     if new_end != current_end_date:
                         st.session_state.planned_trips[idx]['end_date'] = new_end
+                        save_all_data()
                         st.rerun()
 
                 with col4:
                     if st.button("🗑️", key=f"del_{idx}"):
                         st.session_state.planned_trips.pop(idx)
+                        save_all_data()
                         st.rerun()
 
                 # Validation - use session state values (source of truth)
@@ -493,7 +489,7 @@ with tab1:
 
     # Get timeline data
     timeline_start = datetime.date(2024, 9, 15)
-    timeline_end = max(datetime.date(2026, 3, 31),
+    timeline_end = max(datetime.date(2026, 12, 31),
                        max([trip['end_date'] for trip in st.session_state.planned_trips] + [today]))
 
     df = calc_with_future.get_timeline_data(timeline_start, timeline_end)
@@ -533,14 +529,43 @@ with tab1:
                 'label': f"Return\n{df.iloc[idx]['days_available']:.0f} days"
             })
 
-    # Create Altair chart
-    base = alt.Chart(df).encode(
-        x=alt.X('date:T', title='Date', axis=alt.Axis(format='%b %d', labelAngle=-45))
+    # Calculate initial view: today at 1/3 from the left
+    # Show ~9 months of data in the initial view
+    view_days_before = 90   # 3 months before today
+    view_days_after = 180   # 6 months after today
+    view_start = pd.Timestamp(today - timedelta(days=view_days_before))
+    view_end = pd.Timestamp(today + timedelta(days=view_days_after))
+
+    # Interactive pan/zoom on both axes
+    pan_zoom = alt.selection_interval(
+        bind='scales',
     )
+
+    # Generate fixed month-start tick values across the full timeline
+    month_ticks = pd.date_range(
+        start=timeline_start.replace(day=1),
+        end=timeline_end,
+        freq='MS'  # Month Start
+    ).tolist()
+
+    # Create Altair chart
+    x_axis = alt.X(
+        'date:T',
+        title='Date',
+        axis=alt.Axis(
+            format='%b %Y',
+            labelAngle=-45,
+            values=month_ticks,
+            tickCount=len(month_ticks),
+        ),
+        scale=alt.Scale(domain=[view_start, view_end])
+    )
+
+    base = alt.Chart(df).encode(x=x_axis)
 
     # Line chart for days available
     line = base.mark_line(size=3, color='#27ae60').encode(
-        y=alt.Y('days_available:Q', title='Days Available to Spend in Turkey', scale=alt.Scale(domain=[-20, 200])),
+        y=alt.Y('days_available:Q', title='Days Available to Spend in Turkey', scale=alt.Scale(domain=[-20, 183])),
         tooltip=[
             alt.Tooltip('date:T', title='Date', format='%b %d, %Y'),
             alt.Tooltip('days_available:Q', title='Days Available'),
@@ -587,19 +612,29 @@ with tab1:
             ]
         )
 
-    # Combine
+    # Combine - add pan/zoom selection
+    layers = [line, buffer_line, limit_line, today_line]
     if inflection_points is not None:
-        chart = (line + buffer_line + limit_line + today_line + inflection_points).properties(
-            height=400,
-            title='Days Available Over Time'
-        ).interactive()
-    else:
-        chart = (line + buffer_line + limit_line + today_line).properties(
-            height=400,
-            title='Days Available Over Time'
-        ).interactive()
+        layers.append(inflection_points)
 
-    st.altair_chart(chart, width='stretch')
+    chart = alt.layer(*layers).properties(
+        height=500,
+        title='Days Available Over Time (drag to pan, scroll to zoom)'
+    ).add_params(pan_zoom)
+
+    chart_col, info_col = st.columns([1, 1])
+    with chart_col:
+        st.altair_chart(chart, width="stretch")
+    with info_col:
+        st.markdown(f"""
+        **Quick Reference**
+        - 🔵 Blue line: Today ({today.strftime('%b %d, %Y')})
+        - 🟠 Orange dashed: Safety buffer ({buffer_days} days)
+        - 🔴 Red line: 183-day limit
+        - 🟢 Green line: Days available
+
+        *Drag to pan, scroll to zoom*
+        """)
 
     st.divider()
 
@@ -742,7 +777,4 @@ with tab2:
 # ============================================================================
 
 st.divider()
-if st.session_state.using_imported_data:
-    st.caption("💡 Tip: You're using imported data. Changes will NOT be saved to the server - your data stays private!")
-else:
-    st.caption("💡 Tip: Plan your trips in the Trip Planner tab. Import your own JSON to keep your data private on the deployed app.")
+st.caption("💡 Tip: Plan your trips in the Trip Planner tab. Export your data from the sidebar.")
